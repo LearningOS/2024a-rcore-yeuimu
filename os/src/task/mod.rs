@@ -14,6 +14,11 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::{
+    config::MAX_SYSCALL_NUM,
+    timer::get_time_ms,
+};
+
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
@@ -54,6 +59,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            task_syscall_times: [0; MAX_SYSCALL_NUM],
+            task_time: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -80,6 +87,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        task0.task_time = get_time_ms() as usize;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -125,6 +133,10 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            if inner.tasks[current].task_time == 0 {
+                inner.tasks[current].task_time = get_time_ms() as usize;
+                // println!("task {} first running time: {}", current, inner.tasks[current].task_time);
+            }
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -134,6 +146,32 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// save syscall info
+    #[allow(dead_code)]
+    fn save_syscall_info(&self, id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_syscall_times[id] += 1;
+        // println!("task {} times of syscall {}: {}", current, id, inner.tasks[current].task_syscall_times[id]);
+    }
+
+    /// get syscall info
+    #[allow(dead_code)]
+    fn get_syscall_info(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let syscall_items = inner.tasks[current].task_syscall_times;
+        syscall_items
+    }
+
+    /// get first running time
+    #[allow(dead_code)]
+    fn get_first_running_time(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_time
     }
 }
 
@@ -168,4 +206,22 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// save syscall info
+#[allow(dead_code)]
+pub fn save_syscall_info(id: usize) {
+    TASK_MANAGER.save_syscall_info(id);
+}
+
+/// get syscall info
+#[allow(dead_code)]
+pub fn get_syscall_info() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_syscall_info()
+}
+
+/// get first running time
+#[allow(dead_code)]
+pub fn get_first_running_time() -> usize {
+    TASK_MANAGER.get_first_running_time()
 }
