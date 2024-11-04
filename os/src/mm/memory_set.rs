@@ -7,6 +7,7 @@ use super::{StepByOne, VPNRange};
 use crate::config::{
     KERNEL_STACK_SIZE, MEMORY_END, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT_BASE, USER_STACK_SIZE,
 };
+use crate::mm::address::SimpleRange;
 use crate::sync::UPSafeCell;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -261,6 +262,44 @@ impl MemorySet {
         } else {
             false
         }
+    }
+
+    /// the start address and end whether in range
+    #[allow(unused)]
+    pub fn is_overlapping(&self, start_a: VirtAddr, end_a: VirtAddr) -> bool {
+        for i in &self.areas {
+            let end_b = VirtAddr::from(i.vpn_range.get_end());
+            let start_b = VirtAddr::from(i.vpn_range.get_start());
+            if (start_a <= start_b && start_b < end_a)
+                || (start_b <= start_a && start_a < end_b)
+                || (start_a <= start_b && end_b <= end_a)
+                || (start_b <= start_a && end_a <= end_b)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// unmap area address
+    #[allow(unused)]
+    pub fn unmap_area(&mut self, start: VirtPageNum, end: VirtPageNum) -> bool {
+        for (i, v) in &mut self.areas.iter_mut().enumerate() {
+            if start == v.vpn_range.get_start() && end == v.vpn_range.get_end() {
+                info!("start: {}", start.0);
+                info!("end: {}", end.0);
+                info!("allocated_start: {}", v.vpn_range.get_start().0);
+                info!("allocated_end: {}", v.vpn_range.get_end().0);
+                let vpn_range = SimpleRange::new(start, end);
+                for vpn in vpn_range {
+                    MapArea::unmap_one(v, &mut self.page_table, vpn);
+                }
+                info!("unmap OK");
+                self.areas.remove(i);
+                return true;
+            }
+        }
+        false
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory

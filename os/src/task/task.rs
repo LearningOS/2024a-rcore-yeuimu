@@ -1,6 +1,8 @@
 //! Types related to task management
 use super::TaskContext;
+use crate::config::MAX_SYSCALL_NUM;
 use crate::config::TRAP_CONTEXT_BASE;
+use crate::mm::VirtPageNum;
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -28,6 +30,12 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// The time first running
+    pub task_time: usize,
+
+    /// The called syscall times and type
+    pub task_syscall_times: [u32; MAX_SYSCALL_NUM],
 }
 
 impl TaskControlBlock {
@@ -63,6 +71,8 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            task_time: 0,
+            task_syscall_times: [0; MAX_SYSCALL_NUM],
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -94,6 +104,64 @@ impl TaskControlBlock {
             Some(old_break)
         } else {
             None
+        }
+    }
+    /// malloc a memory block
+    #[allow(unused)]
+    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> Result<bool, &'static str> {
+        let start_v = VirtAddr::from(start);
+        let end_v = VirtAddr::from(VirtAddr::from(start + len).ceil());
+
+        // 检查地址是否按页对齐
+        if !start_v.aligned() || !end_v.aligned() {
+            return Err("Address is not page-aligned.");
+        }
+
+        // 检查是否有重叠
+        if self.memory_set.is_overlapping(start_v, end_v) {
+            return Err("Memory area is overlapping.");
+        }
+
+        // 检查权限位是否有效
+        if port & !0b111 != 0 {
+            return Err("Invalid permission bits.");
+        }
+
+        // 必须至少有一个权限位被设置
+        if port & 0b111 == 0 {
+            return Err("At least one permission must be set.");
+        }
+
+        let mut perm = MapPermission::U; // 默认权限
+        if port & 1 != 0 {
+            perm |= MapPermission::R;
+        }
+        if port & (1 << 1) != 0 {
+            perm |= MapPermission::W;
+        }
+        if port & (1 << 2) != 0 {
+            perm |= MapPermission::X;
+        }
+
+        // 插入映射
+        self.memory_set.insert_framed_area(start_v, end_v, perm);
+        Ok(true) // 映射成功
+    }
+
+    /// dealloc a memory block
+    pub fn unmap(&mut self, start: usize, len: usize) -> Result<bool, &'static str> {
+        let start_v = VirtAddr::from(start);
+        let end_v = VirtAddr::from(start + len);
+
+        // 检查地址是否按页对齐
+        if !start_v.aligned() || !end_v.aligned() {
+            return Err("Address is not page-aligned.");
+        }
+
+        if self.memory_set.unmap_area(VirtPageNum::from(start_v), VirtPageNum::from(end_v)) {
+            Ok(true)
+        } else {
+            Err("没有映射这个地址")
         }
     }
 }

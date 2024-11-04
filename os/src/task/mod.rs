@@ -15,12 +15,15 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{PageTableEntry, VirtPageNum};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
+
+use crate::{config::MAX_SYSCALL_NUM, timer::get_time_ms};
 
 pub use context::TaskContext;
 
@@ -79,6 +82,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.task_time = get_time_ms() as usize;
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -143,6 +147,9 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            if inner.tasks[current].task_time == 0 {
+                inner.tasks[current].task_time = get_time_ms() as usize;
+            }
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -152,6 +159,53 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// save syscall info
+    #[allow(unused)]
+    fn save_syscall_info(&self, id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_syscall_times[id] += 1;
+    }
+
+    /// get syscall info
+    #[allow(unused)]
+    fn get_syscall_info(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let syscall_items = inner.tasks[current].task_syscall_times;
+        syscall_items
+    }
+
+    /// get first running time
+    #[allow(unused)]
+    fn get_first_running_time(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_time
+    }
+
+    /// mmap on current task
+    fn mmap_current_task(&self, start: usize, len: usize, port: usize) -> Result<bool, &'static str> {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].mmap(start, len, port)
+    }
+
+    /// unmap on current task
+    fn unmap_current_task(&self, start: usize, len: usize) -> Result<bool, &'static str> {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].unmap(start, len)
+    }
+
+    /// Translate a virtual page number to a page table entry
+    #[allow(unused)]
+    pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.translate(vpn)
     }
 }
 
@@ -201,4 +255,38 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// save syscall info
+#[allow(dead_code)]
+pub fn save_syscall_info(id: usize) {
+    TASK_MANAGER.save_syscall_info(id);
+}
+
+/// get syscall info
+#[allow(dead_code)]
+pub fn get_syscall_info() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_syscall_info()
+}
+
+/// get first running time
+#[allow(dead_code)]
+pub fn get_first_running_time() -> usize {
+    TASK_MANAGER.get_first_running_time()
+}
+
+/// mmap
+pub fn mmap_current_task(start: usize, len: usize, port: usize) -> Result<bool, &'static str> {
+    TASK_MANAGER.mmap_current_task(start, len, port)
+}
+
+/// unmap
+pub fn unmap_current_task(start: usize, len: usize) -> Result<bool, &'static str> {
+    TASK_MANAGER.unmap_current_task(start, len)
+}
+
+/// Translate a virtual page number to a page table entry
+#[allow(unused)]
+pub fn translate(vpn: VirtPageNum) -> Option<PageTableEntry> {
+    TASK_MANAGER.translate(vpn)
 }
