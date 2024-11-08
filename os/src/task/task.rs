@@ -41,6 +41,43 @@ impl TaskControlBlock {
     }
 }
 
+use core::cmp::Ordering;
+
+/// 
+pub struct Stride(pub u64);
+
+impl PartialOrd for Stride {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let big_stride = u64::MAX;
+        let half_stride = big_stride / 2;
+        
+        // 计算两者的差值并取绝对值
+        let diff = if self.0 > other.0 {
+            self.0 - other.0
+        } else {
+            other.0 - self.0
+        };
+
+        // 如果差值小于 BigStride / 2，直接比较
+        if diff < half_stride {
+            self.0.partial_cmp(&other.0)
+        } else {
+            // 如果差值大于等于 BigStride / 2，反转比较结果
+            if self.0 < other.0 {
+                Some(Ordering::Greater)
+            } else {
+                Some(Ordering::Less)
+            }
+        }
+    }
+}
+
+impl PartialEq for Stride {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
+
 ///
 pub struct TaskControlBlockInner {
     /// The physical page number of the frame where the trap context is placed
@@ -80,6 +117,12 @@ pub struct TaskControlBlockInner {
 
     /// The called syscall times and type
     pub task_syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// priority
+    pub task_priority: isize,
+
+    /// stride
+    pub task_stride: Stride,
 }
 
 impl TaskControlBlockInner {
@@ -133,6 +176,8 @@ impl TaskControlBlock {
                     program_brk: user_sp,
                     task_syscall_times: [0; MAX_SYSCALL_NUM],
                     task_time: get_time_ms() as usize,
+                    task_priority: 16,
+                    task_stride: Stride(0),
                 })
             },
         };
@@ -210,6 +255,8 @@ impl TaskControlBlock {
                     program_brk: user_sp,
                     task_syscall_times: [0; MAX_SYSCALL_NUM],
                     task_time: get_time_ms() as usize,
+                    task_priority: 16,
+                    task_stride: Stride(0),
                 })
             },
         });
@@ -258,6 +305,8 @@ impl TaskControlBlock {
                     program_brk: parent_inner.program_brk,
                     task_syscall_times: [0; MAX_SYSCALL_NUM],
                     task_time: get_time_ms() as usize,
+                    task_priority: 16,
+                    task_stride: Stride(0),
                 })
             },
         });

@@ -151,7 +151,6 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     let us = get_time_us();
 
-    let current = current_task().unwrap();
     let token = current_user_token();
     let ts = translated_refmut(token, ts);
 
@@ -177,7 +176,6 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
         return -1;
     }
 
-    let current = current_task().unwrap();
     let token = current_user_token();
     let ti = translated_refmut(token, ti);
 
@@ -230,10 +228,15 @@ pub fn sys_sbrk(size: i32) -> isize {
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio >= 2 {
+        current_task().unwrap().inner_exclusive_access().task_priority = prio;
+        prio
+    } else {
+        -1
+    }
 }
