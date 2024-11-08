@@ -6,6 +6,11 @@ use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
+use crate::{
+    config::MAX_SYSCALL_NUM,
+    mm::{MapPermission, VirtPageNum},
+    timer::get_time_ms,
+};
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -38,6 +43,7 @@ impl TaskControlBlock {
     }
 }
 
+///
 pub struct TaskControlBlockInner {
     /// The physical page number of the frame where the trap context is placed
     pub trap_cx_ppn: PhysPageNum,
@@ -71,6 +77,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// The time first running
+    pub task_time: usize,
+
+    /// The called syscall times and type
+    pub task_syscall_times: [u32; MAX_SYSCALL_NUM],
 }
 
 impl TaskControlBlockInner {
@@ -83,6 +95,7 @@ impl TaskControlBlockInner {
     fn get_status(&self) -> TaskStatus {
         self.task_status
     }
+    ///
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
@@ -135,6 +148,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    task_syscall_times: [0; MAX_SYSCALL_NUM],
+                    task_time: get_time_ms() as usize,
                 })
             },
         };
@@ -177,6 +192,56 @@ impl TaskControlBlock {
         // **** release current PCB
     }
 
+    /// spawn
+    #[allow(unused)]
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        // ---- access parent PCB exclusively
+        let mut parent_inner = self.inner_exclusive_access();
+        // memory_set with elf program headers/trampoline/trap context/user stack
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        // alloc a pid and a kernel stack in kernel space
+        let pid_handle = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+        // push a task context which goes to trap_return to the top of kernel stack
+        let task_control_block = Arc::new(Self {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    memory_set,
+                    parent: Some(Arc::downgrade(self)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    heap_bottom: user_sp,
+                    program_brk: user_sp,
+                    task_syscall_times: [0; MAX_SYSCALL_NUM],
+                    task_time: get_time_ms() as usize,
+                })
+            },
+        });
+        // add child
+        parent_inner.children.push(task_control_block.clone());
+        // initialize trap_cx
+        let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            kernel_stack_top,
+            trap_handler as usize,
+        );
+        task_control_block
+    }
+
     /// parent process fork the child process
     pub fn fork(self: &Arc<TaskControlBlock>) -> Arc<TaskControlBlock> {
         // ---- hold parent PCB lock
@@ -216,6 +281,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    task_syscall_times: [0; MAX_SYSCALL_NUM],
+                    task_time: get_time_ms() as usize,
                 })
             },
         });
@@ -260,6 +327,91 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// malloc a memory block
+    #[allow(unused)]
+    pub fn mmap(&self, start: usize, len: usize, port: usize) -> Result<bool, &'static str> {
+        let start_v = VirtAddr::from(start);
+        let end_v = VirtAddr::from(VirtAddr::from(start + len).ceil());
+        let mut inner = self.inner_exclusive_access();
+
+        // 检查地址是否按页对齐
+        if !start_v.aligned() || !end_v.aligned() {
+            return Err("Address is not page-aligned.");
+        }
+
+        // 检查是否有重叠
+        if inner.memory_set.is_overlapping(start_v, end_v) {
+            return Err("Memory area is overlapping.");
+        }
+
+        // 检查权限位是否有效
+        if port & !0b111 != 0 {
+            return Err("Invalid permission bits.");
+        }
+
+        // 必须至少有一个权限位被设置
+        if port & 0b111 == 0 {
+            return Err("At least one permission must be set.");
+        }
+
+        let mut perm = MapPermission::U; // 默认权限
+        if port & 1 != 0 {
+            perm |= MapPermission::R;
+        }
+        if port & (1 << 1) != 0 {
+            perm |= MapPermission::W;
+        }
+        if port & (1 << 2) != 0 {
+            perm |= MapPermission::X;
+        }
+
+        // 插入映射
+        inner.memory_set.insert_framed_area(start_v, end_v, perm);
+        Ok(true) // 映射成功
+    }
+
+    /// dealloc a memory block
+    pub fn unmap(&self, start: usize, len: usize) -> Result<bool, &'static str> {
+        let start_v = VirtAddr::from(start);
+        let end_v = VirtAddr::from(start + len);
+        let mut inner = self.inner_exclusive_access();
+
+        // 检查地址是否按页对齐
+        if !start_v.aligned() || !end_v.aligned() {
+            return Err("Address is not page-aligned.");
+        }
+
+        if inner
+            .memory_set
+            .unmap_area(VirtPageNum::from(start_v), VirtPageNum::from(end_v))
+        {
+            Ok(true)
+        } else {
+            Err("没有映射这个地址")
+        }
+    }
+
+    /// save syscall info
+    #[allow(unused)]
+    pub fn save_syscall_info(&self, id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        inner.task_syscall_times[id] += 1;
+    }
+
+    /// get syscall info
+    #[allow(unused)]
+    pub fn get_syscall_info(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        inner.task_syscall_times
+    }
+
+    /// get first running time
+    #[allow(unused)]
+    pub fn get_first_running_time(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.task_time
     }
 }
 

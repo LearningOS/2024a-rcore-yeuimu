@@ -20,8 +20,9 @@ mod processor;
 mod switch;
 #[allow(clippy::module_inception)]
 #[allow(rustdoc::private_intra_doc_links)]
-mod task;
+pub mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::fs::{open_file, OpenFlags};
 use alloc::sync::Arc;
 pub use context::TaskContext;
@@ -119,4 +120,38 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+/// malloc a memory block
+#[allow(unused)]
+pub fn mmap(start: usize, len: usize, port: usize) -> Result<bool, &'static str> {
+    let current = current_task().unwrap().clone();
+    current.mmap(start, len, port)
+}
+
+/// dealloc a memory block
+pub fn unmap(start: usize, len: usize) -> Result<bool, &'static str> {
+    let current = current_task().unwrap().clone();
+    current.unmap(start, len)
+}
+
+/// save syscall info
+#[allow(unused)]
+pub fn save_syscall_info(id: usize) {
+    let current = current_task().unwrap().clone();
+    current.save_syscall_info(id)
+}
+
+/// get syscall info
+#[allow(unused)]
+pub fn get_syscall_info() -> [u32; MAX_SYSCALL_NUM] {
+    let current = current_task().unwrap().clone();
+    current.get_syscall_info()
+}
+
+/// get first running time
+#[allow(unused)]
+pub fn get_first_running_time() -> usize {
+    let current = current_task().unwrap().clone();
+    current.get_first_running_time()
 }
