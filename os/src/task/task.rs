@@ -70,6 +70,7 @@ pub struct TaskControlBlockInner {
 
     /// It is set when active exit or execution error occurs
     pub exit_code: i32,
+    /// 
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
 
     /// Heap bottom
@@ -86,9 +87,11 @@ pub struct TaskControlBlockInner {
 }
 
 impl TaskControlBlockInner {
+    /// 
     pub fn get_trap_cx(&self) -> &'static mut TrapContext {
         self.trap_cx_ppn.get_mut()
     }
+    ///
     pub fn get_user_token(&self) -> usize {
         self.memory_set.token()
     }
@@ -99,6 +102,7 @@ impl TaskControlBlockInner {
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
+    ///
     pub fn alloc_fd(&mut self) -> usize {
         if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
             fd
@@ -207,6 +211,7 @@ impl TaskControlBlock {
         let pid_handle = pid_alloc();
         let kernel_stack = kstack_alloc();
         let kernel_stack_top = kernel_stack.get_top();
+        let mut new_fd_table: Vec<Option<Arc<dyn File + Send + Sync>>> = Vec::new();
         // push a task context which goes to trap_return to the top of kernel stack
         let task_control_block = Arc::new(Self {
             pid: pid_handle,
@@ -223,6 +228,14 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    fd_table: vec![
+                        // 0 -> stdin
+                        Some(Arc::new(Stdin)),
+                        // 1 -> stdout
+                        Some(Arc::new(Stdout)),
+                        // 2 -> stderr
+                        Some(Arc::new(Stdout)),
+                    ],
                     task_syscall_times: [0; MAX_SYSCALL_NUM],
                     task_time: get_time_ms() as usize,
                 })
