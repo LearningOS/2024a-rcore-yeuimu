@@ -155,6 +155,23 @@ impl Inode {
             v
         })
     }
+    /// Return stat under root node
+    pub fn get_stat(&self) -> Vec<(String, u32)> {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut v: Vec<(String, u32)> = Vec::new();
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                v.push((String::from(dirent.name()), dirent.inode_id()));
+            }
+            v
+        })
+    }
     /// Read data from current inode
     pub fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
         let _fs = self.fs.lock();
