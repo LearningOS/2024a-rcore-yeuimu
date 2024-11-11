@@ -2,13 +2,10 @@
 
 mod inode;
 mod stdio;
-use crate::fs::inode::ROOT_INODE;
+pub use crate::fs::inode::ROOT_INODE;
 use alloc::vec::Vec;
-use lazy_static::*;
 
 use crate::mm::UserBuffer;
-use crate::sync::UPSafeCell;
-use alloc::sync::Arc;
 
 /// trait File for all file types
 pub trait File: Send + Sync {
@@ -20,6 +17,8 @@ pub trait File: Send + Sync {
     fn read(&self, buf: UserBuffer) -> usize;
     /// write to the file from buf, return the number of bytes written
     fn write(&self, buf: UserBuffer) -> usize;
+    /// get inode
+    fn inode_id(&self) -> Option<u32>;
 }
 
 /// The stat of a inode
@@ -35,30 +34,30 @@ pub struct Stat {
     /// number of hard links
     pub nlink: u32,
     /// unused pad
-    pad: [u64; 7],
+    pub pad: [u64; 7],
 }
 
 impl Stat {
+    ///
     pub fn scan() -> Vec<Self> {
-        let mut stats: Vec<Self> = Vec::new();
+        let mut fstat: Vec<Self> = Vec::new();
         let info = ROOT_INODE.get_stat();
-        for (name, inode) in info {
-            if let Some(stat) = stats
-                .iter_mut()
-                .find(|stat: &&mut Stat| stat.ino == inode.into())
-            {
-                stat.nlink += 1;
+        for (_name, inode) in info {
+            if let Some(f) = fstat.iter_mut().find(|fstat| fstat.ino == inode as u64) {
+                // info!("scan()");
+                // info!("{}", inode);
+                f.nlink += 1;
             } else {
-                stats.push(Stat {
+                fstat.push(Stat {
                     dev: 0,
                     ino: inode.into(),
-                    mode: StatMode::DIR,
+                    mode: StatMode::FILE,
                     nlink: 1,
                     pad: [0; 7],
                 })
             }
         }
-        stats
+        fstat
     }
 }
 
@@ -73,11 +72,6 @@ bitflags! {
         /// ordinary regular file
         const FILE  = 0o100000;
     }
-}
-
-lazy_static! {
-    pub static ref STATS: Arc<UPSafeCell<Vec<Stat>>> =
-        Arc::new(unsafe { UPSafeCell::new(Stat::scan()) });
 }
 
 pub use inode::{list_apps, open_file, OSInode, OpenFlags};

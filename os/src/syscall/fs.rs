@@ -1,5 +1,5 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat, STATS};
+use crate::fs::{open_file, OpenFlags, Stat, ROOT_INODE};
 use crate::mm::{translated_byte_buffer, translated_refmut, translated_str, UserBuffer};
 use crate::task::{current_task, current_user_token};
 
@@ -76,25 +76,40 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
+#[allow(unused)]
 pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    let current = current_task().unwrap().inner_exclusive_access();
+    trace!("kernel:pid[{}] sys_fstat", current_task().unwrap().pid.0);
     let token = current_user_token();
-    let st = translated_refmut(token, st);
-    let fd_table = current.fd_table;
-    if let Some(inode) = fd_table[fd] {
-        if let Some(stat) = STATS
-            .exclusive_access()
-            .iter_mut()
-            .find(|stat| inode == stat.ino)
-        {
-            unsafe {
-                *st = stat.clone();
+    let new_st = translated_refmut(token, st);
+
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+
+    if let Some(file) = &inner.fd_table[fd] {
+        if let Some(inode_id) = &file.inode_id() {
+            // info!("sys_fstat");
+            // info!("{}", inode_id);
+            if let Some(fstat) = Stat::scan()
+                .iter_mut()
+                .find(|fstat| fstat.ino == *inode_id as u64)
+            {
+                let mode = fstat.mode;
+                let ino = fstat.ino;
+                let nlink = fstat.nlink;
+                // info!("{}", nlink);
+                unsafe {
+                    *new_st = Stat {
+                        dev: 0,
+                        pad: [0; 7],
+                        ino,
+                        mode,
+                        nlink,
+                    };
+                }
+                0
+            } else {
+                -1
             }
-            0
         } else {
             -1
         }
@@ -104,19 +119,33 @@ pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
 }
 
 /// YOUR JOB: Implement linkat.
-pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
+pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_linkat", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let oldname = translated_str(token, old_name);
+    let newname = translated_str(token, new_name);
+    if let Some(res) = ROOT_INODE.create_link(&oldname, &newname) {
+        return res as isize;
+    }
     -1
 }
 
 /// YOUR JOB: Implement unlinkat.
-pub fn sys_unlinkat(_name: *const u8) -> isize {
+pub fn sys_unlinkat(name: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_unlinkat",
         current_task().unwrap().pid.0
     );
+    let token = current_user_token();
+    let n = translated_str(token, name);
+    if let Some(inode) = ROOT_INODE.find(&n) {
+        info!("Found {}", n);
+        ROOT_INODE.delete_link(&n);
+        let inode_id = inode.inode_id();
+        if !Stat::scan().iter_mut().any(|stat| stat.ino == inode_id as u64) {
+            inode.clear();
+            return 0;
+        }
+    }
     -1
 }
