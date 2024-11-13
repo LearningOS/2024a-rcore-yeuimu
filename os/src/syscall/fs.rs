@@ -140,9 +140,11 @@ pub fn sys_unlinkat(name: *const u8) -> isize {
     let n = translated_str(token, name);
     if let Some(inode) = ROOT_INODE.find(&n) {
         info!("Found {}", n);
+        info!("{}", ROOT_INODE.ls().join(" "));
         ROOT_INODE.delete_link(&n);
         let inode_id = inode.inode_id();
         if !Stat::scan().iter_mut().any(|stat| stat.ino == inode_id as u64) {
+            info!("Clear inode");
             inode.clear();
             return 0;
         }
