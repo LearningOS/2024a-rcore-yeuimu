@@ -75,18 +75,17 @@ impl Inode {
     }
     /// delete link
     pub fn delete_link(&self, name: &str) {
-        let mut _fs = self.fs.lock();
-        self.modify_disk_inode( | root_inode | {
-            assert!(root_inode.is_dir());
-            let file_count = (root_inode.size as usize) / DIRENT_SZ;
-            let mut tmp = DirEntry::empty();
-            let mut swap = DirEntry::empty();
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
             for i in 0..file_count {
-                root_inode.read_at(DIRENT_SZ * i, tmp.as_bytes_mut(), &self.block_device);
-                if tmp.name() == name {
-                    root_inode.read_at(DIRENT_SZ * (file_count - 1), swap.as_bytes_mut(), &self.block_device);
-                    root_inode.write_at(DIRENT_SZ * i, swap.as_bytes_mut(), &self.block_device);
-                    root_inode.size -= DIRENT_SZ as u32;
+                let mut dirent = DirEntry::empty();
+                disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device);
+                if dirent.name() == name {
+                    disk_inode.write_at(
+                        i * DIRENT_SZ,
+                        DirEntry::empty().as_bytes_mut(),
+                        &self.block_device,
+                    );
                 }
             }
         });
