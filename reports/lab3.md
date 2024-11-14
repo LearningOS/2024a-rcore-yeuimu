@@ -1,16 +1,60 @@
 ## 编程作业
 
-本章增加了一层文件系统抽象，实验要求实现：sys_linkat、sys_unlinkat、sys_stat
+`spawn` 系统调用是 `fork` 和 `exec` 系统调用的改良版，不需要复制父进程的内存空间和其他东西，而是直接像 `TaskControlBlock::new` 那样创建一个全新的内存空间，然后创建其执行环境，不同的是 `spawn` 创建的是子进程
 
-sys_linkat 可以参考 Inode.create 的实现，使用旧名寻找其inode，新建一个目录项，其inode指向旧名的inode
+`TaskManager` 的 `fetch` 方法中实现了 **stride 调度算法**，每次调度新任务时，选取**步长总量最小的**任务，之后增加此任务的步长，**步长增量**与任务优先级成正比，如此循环往复
 
-sys_unlinkat 使用名字在根目录下寻找目录项，然后将此目录项换成一个空目录项，实验不要求删除此目录项，就置空处理；注意，如果检测到硬链接为0，就clear这个inode
-
-sys_stat 这里需要解决如何将fd转成inode，通过inode又获取其硬链接次数，这里直接向 Inode 增加一个函数；并且，每次获取状态就便利一次根目录……就不维护一个全局变量了
+`set_priority` 系统调用则可以改变优先级
 
 ## 简答题
 
-目前rcore仅支持绝对路径，对于任何文件/目录的索引都必须从根目录开始向下逐级进行。等到索引完成之后，我们才能对文件/目录进行操作。如果损坏，任何操作都可能不起作用。
+如果 `p1.stride = 255`，`p2.stride = 250`，p2 继续执行后其 stride 将溢出回到 0。因此，溢出会导致进程顺序错误，使得实际调度与期望不符。
+
+在不溢出时，当进程优先级>=2时，最大的pass是 BigStride/2，最小的pass是 BigStride/16，它们之间差值就是 BigStride/2 - BigStride/16，所以它们的差值肯定小于 BigStride/2，则`STRIDE_MAX – STRIDE_MIN <= BigStride / 2`
+
+如果出现不符合这条公式的情况，那就是溢出了，我们可以反转对比的结果
+
+于是：
+
+```rust
+use core::cmp::Ordering;
+
+struct Stride(u64);
+
+impl PartialOrd for Stride {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let big_stride = u64::MAX;
+        let half_stride = big_stride / 2;
+        
+        // 计算两者的差值并取绝对值
+        let diff = if self.0 > other.0 {
+            self.0 - other.0
+        } else {
+            other.0 - self.0
+        };
+
+        // 如果差值小于 BigStride / 2，直接比较
+        if diff < half_stride {
+            self.0.partial_cmp(&other.0)
+        } else {
+            // 如果差值大于等于 BigStride / 2，反转比较结果
+            if self.0 < other.0 {
+                Some(Ordering::Greater)
+            } else {
+                Some(Ordering::Less)
+            }
+        }
+    }
+}
+
+impl PartialEq for Stride {
+    fn eq(&self, other: &Self) -> bool {
+        false
+    }
+}
+```
+
+上面是以八位的stride为例，这里实现用的是64位的stride，所以这里的stride取64位最大值
 
 ## 荣誉准则
 
